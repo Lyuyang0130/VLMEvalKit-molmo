@@ -23,7 +23,7 @@ DATASET_PROMPTS = {
     'OCRVQA_TEST':'ocr_vqa:',
     'OCRVQA_TESTCORE':'ocr_vqa:',
     'ScienceQA_VAL':'science_qa:',
-    'ScienceQA_TEST':'science_qa:',
+    #'ScienceQA_TEST':'science_qa:',
     'TableVQABench':'tabwmp_da:',
     'TextVQA_VAL':'text_vqa:'
 }
@@ -46,16 +46,16 @@ class molmo(BaseModel):
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
-                device_map='cuda')
+                torch_dtype=torch.float16,
+                device_map='auto')
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
-                device_map="auto")
+                torch_dtype=torch.float16,
+                device_map='auto')
 
-        self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16)
+        self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.float16)
         self.kwargs = kwargs
         self.model_name = model_path
         # set default maximum number of crops to 36
@@ -75,13 +75,20 @@ class molmo(BaseModel):
             prompt = self.build_prompt_mcq_vqa(line)
         elif dataset in ['MathVista_MINI']:
             prompt = self.build_prompt_mathvista(line)
+        elif dataset in ['POPE_sample']:
+            prompt = self.build_prompt_y_n(line)
+        elif dataset in ['GQA_TestDev_Balanced_sample']:
+            prompt = self.build_prompt_vqa_oneword(line)
         elif dataset in ['AI2D_TEST', 'AI2D_TEST_NO_MASK']:
-            prompt = self.build_prompt_ai2d(line)
+            prompt = self.build_prompt_vqa(line)
+        elif dataset in ['ScienceQA_TEST']:
+            prompt = self.build_prompt_multiple_choice(line)
         elif dataset is not None and listinstr(list(DATASET_PROMPTS.keys()), dataset):
             prefix = DATASET_PROMPTS[dataset]  # rest of supervised datasets are in VQA format
             prompt = self.build_prompt_vqa(line, prefix)
         elif dataset is not None and listinstr(['MCQ'], DATASET_TYPE(dataset)):
             prompt = self.build_prompt_multiple_choice(line)
+      
         else:
             prompt = self.build_prompt_vqa(line)
 
@@ -99,6 +106,9 @@ class molmo(BaseModel):
             prompt = self.build_prompt_multiple_choice(line)
         else:
             prompt = self.build_prompt_vqa(line)
+        return prompt
+    def build_prompt_vqa_oneword(self, line):
+        prompt = self.build_prompt_vqa(line)
         return prompt
 
     def build_prompt_ai2d(self, line):
@@ -130,6 +140,7 @@ class molmo(BaseModel):
             prompt = self.build_prompt_multiple_choice(line)
         else:
             prompt = self.build_prompt_vqa(line)
+            prompt += "\nPlease provide the final answer without any other output."
         return prompt
 
     def build_prompt_multiple_choice(self, line, prefix=None):
@@ -159,6 +170,14 @@ class molmo(BaseModel):
             prompt = f"{prefix} {question}"
         return prompt
 
+    def build_prompt_y_n(self, line, prefix=None):
+        question = line['question']
+        if prefix is None:
+            prompt = f"{TYPE_PROMPTS['Y/N']} {question}"
+        else:
+            prompt = f"{prefix} {question}"
+        return prompt
+
     def generate_inner(self, message, dataset=None):
         from transformers import GenerationConfig
         prompt, image_path = self.message_to_promptimg(message, dataset=dataset)
@@ -181,7 +200,7 @@ class molmo(BaseModel):
         inputs = {k: v.to(self.model.device).unsqueeze(0) for k, v in inputs.items()}
 
         # generate output; maximum 200 new tokens; stop generation when <|endoftext|> is generated
-        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.float16):
             output = self.model.generate_from_batch(
                 inputs,
                 GenerationConfig(max_new_tokens=200, stop_strings="<|endoftext|>"),
